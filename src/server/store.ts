@@ -7,7 +7,10 @@ import type {
   JsonObject,
   Node,
   PathStep,
+  ReplayComparison,
   Run,
+  RunSummary,
+  Schema,
 } from '../common/types';
 import {buildDiagnostics} from '../common/graph';
 import {seedGraph} from '../common/seed';
@@ -26,6 +29,17 @@ export class ValidationError extends Error {
   }
 }
 
+/** HTTP-shaped error the route layer can map to a status code. */
+export class HttpError extends Error {
+  constructor(
+    readonly statusCode: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'HttpError';
+  }
+}
+
 type PendingRun = {
   run: Run;
   abort: AbortController;
@@ -33,6 +47,12 @@ type PendingRun = {
   graphRevision: number;
   /** immutable per-step binding (function revision body) captured at creation */
   bound: BoundStep[];
+  /**
+   * Node schemas captured at creation. Live runs read the graph as it stands;
+   * pinned runs (replays) must validate composition against the frozen graph
+   * so a later node edit cannot rewrite what the pinned run does.
+   */
+  schemas: Map<string, Schema>;
 };
 
 /**
@@ -49,6 +69,7 @@ export class StudioStore {
   private graph: Graph;
   private revision = 1;
   private readonly runs = new Map<string, PendingRun>();
+  private readonly replays = new Map<string, ReplayComparison>();
 
   constructor(graph?: Graph) {
     this.graph = graph ?? seedGraph();
@@ -158,17 +179,26 @@ export class StudioStore {
    * Freeze a run: every step is copied and the function source is bound to the
    * revision current at creation time. Later edits — even a publish that
    * happens a millisecond later — cannot change what this run executes.
+   *
+   * When `pinnedGraph` is supplied (replay current side), edges, functions,
+   * revisions AND node schemas resolve from that frozen snapshot and the run
+   * records the snapshot's revision; nothing in the live graph can affect it.
    */
   createRun(input: {
     experimentId?: string;
     steps: PathStep[];
     sample: JsonObject;
+    pinnedGraph?: Graph;
+    pinnedRevision?: number;
   }): {run: Run; abort: AbortController} {
+    const sourceGraph = input.pinnedGraph ?? this.graph;
+    const boundRevision = input.pinnedGraph ? (input.pinnedRevision ?? this.revision) : this.revision;
+    const schemas = new Map(sourceGraph.nodes.map((n) => [n.id, structuredClone(n.schema)]));
     const bound: BoundStep[] = [];
     for (const step of input.steps) {
-      const edge = this.graph.edges.find((e) => e.id === step.edgeId);
+      const edge = sourceGraph.edges.find((e) => e.id === step.edgeId);
       if (!edge) throw new ValidationError(`unknown edge "${step.edgeId}"`);
-      const func = this.graph.funcs.find((f) => f.id === step.funcId);
+      const func = sourceGraph.funcs.find((f) => f.id === step.funcId);
       if (!func) throw new ValidationError(`unknown function "${step.funcId}"`);
       const revisionNumber = step.funcRevision > 0 ? Math.min(step.funcRevision, func.revision) : func.revision;
       const rev = func.revisions[revisionNumber - 1];
@@ -189,7 +219,7 @@ export class StudioStore {
       results: [],
       createdAt: new Date().toISOString(),
     };
-    this.runs.set(run.id, {run, abort: new AbortController(), graphRevision: this.revision, bound});
+    this.runs.set(run.id, {run, abort: new AbortController(), graphRevision: boundRevision, bound, schemas});
     return {run, abort: this.runs.get(run.id)!.abort};
   }
 
@@ -215,8 +245,58 @@ export class StudioStore {
     return this.runs.get(id)?.graphRevision;
   }
 
+  /** Schema captured at run creation — the executor must validate against this. */
+  getRunSchema(runId: string, nodeId: string): Schema | undefined {
+    const pending = this.runs.get(runId);
+    if (pending) {
+      const frozen = pending.schemas.get(nodeId);
+      if (frozen) return structuredClone(frozen);
+    }
+    return this.graph.nodes.find((n) => n.id === nodeId)?.schema;
+  }
+
+  /** Live schema (unpinned callers only). */
   getNodeSchema(id: string) {
     return this.graph.nodes.find((n) => n.id === id)?.schema;
+  }
+
+  // ---- replay comparisons (persisted, retrievable later) ------------------
+
+  saveReplay(replay: ReplayComparison): void {
+    this.replays.set(replay.id, structuredClone(replay));
+  }
+
+  getReplay(id: string): ReplayComparison | undefined {
+    const replay = this.replays.get(id);
+    return replay ? structuredClone(replay) : undefined;
+  }
+
+  /** Mutable live record — only the replay service uses this. */
+  getLiveReplay(id: string): ReplayComparison | undefined {
+    return this.replays.get(id);
+  }
+
+  listReplays(): ReplayComparison[] {
+    return [...this.replays.values()].map((r) => structuredClone(r));
+  }
+
+  /** Summaries of every stored run, newest first, for choosing a source run. */
+  listRuns(): RunSummary[] {
+    return [...this.runs.values()]
+      .map(({run, graphRevision}) => ({
+        id: run.id,
+        experimentId: run.experimentId,
+        status: run.status,
+        pathKey: run.pathKey,
+        start: run.steps[0]?.from,
+        goal: run.steps[run.steps.length - 1]?.to,
+        totalCost: run.totalCost,
+        graphRevision,
+        failedEdgeId: run.failedEdgeId,
+        createdAt: run.createdAt,
+        finishedAt: run.finishedAt,
+      }))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 }
 

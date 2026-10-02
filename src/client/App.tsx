@@ -4,6 +4,7 @@ import {
   Ban,
   FlaskConical,
   GitBranch,
+  History,
   ListTree,
   Play,
   Plus,
@@ -16,8 +17,10 @@ import type {CandidatePath, Edge, Func, Graph, JsonObject, Run} from '../common/
 import {DEFAULT_SAMPLE} from '../common/seed';
 import {api} from './api';
 import {experimentReducer, initialExperiment, isTerminal, type ExperimentState} from './experiment';
+import {ReplayPanel, ReplayTrace, useReplayWorkbench} from './ReplayWorkbench';
 
 type Notice = {kind: 'info' | 'error' | 'conflict'; text: string};
+type Mode = 'experiment' | 'replay';
 
 export default function App() {
   const [graph, setGraph] = useState<Graph | null>(null);
@@ -38,6 +41,8 @@ export default function App() {
   const [showNewEdge, setShowNewEdge] = useState(false);
   const [busy, setBusy] = useState(false);
   const [selectedRunKey, setSelectedRunKey] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>('experiment');
+  const replayWorkbench = useReplayWorkbench({active: mode === 'replay'});
 
   const expRef = useRef(exp);
   expRef.current = exp;
@@ -198,8 +203,31 @@ export default function App() {
       </header>
 
       <section className="workspace">
-        {/* ---- left: experiment ------------------------------------------ */}
+        {/* ---- left: experiment / replay --------------------------------- */}
         <section className="pane">
+          <div className="mode-switch" role="tablist" aria-label="Workbench mode">
+            <button
+              role="tab"
+              aria-selected={mode === 'experiment'}
+              className={mode === 'experiment' ? 'active' : ''}
+              onClick={() => setMode('experiment')}
+            >
+              <FlaskConical size={13} /> Multi-path compare
+            </button>
+            <button
+              role="tab"
+              aria-selected={mode === 'replay'}
+              className={mode === 'replay' ? 'active' : ''}
+              onClick={() => setMode('replay')}
+            >
+              <History size={13} /> Historical replay
+            </button>
+          </div>
+
+          {mode === 'replay' ? (
+            <ReplayPanel workbench={replayWorkbench} nodeIds={nodeIds} graphRevision={revision} />
+          ) : (
+            <>
           <h2><ListTree size={15} /> Experiment</h2>
 
           <div className="field-row">
@@ -263,11 +291,17 @@ export default function App() {
             onCancel={cancelRun}
             latestRevision={(id) => graph.funcs.find((f) => f.id === id)?.revision ?? 0}
           />
+            </>
+          )}
         </section>
 
         {/* ---- middle: details / run trace -------------------------------- */}
         <section className="pane">
-          <RunTrace exp={exp} runKey={selectedRunKey} />
+          {mode === 'replay' ? (
+            <ReplayTrace replay={replayWorkbench.state.replay} busy={replayWorkbench.state.busy} />
+          ) : (
+            <RunTrace exp={exp} runKey={selectedRunKey} />
+          )}
         </section>
 
         {/* ---- right: graph editor ---------------------------------------- */}

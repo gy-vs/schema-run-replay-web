@@ -51,7 +51,9 @@ export class RunExecutor {
 
       // 0. composition guard: the current intermediate document must conform
       // to this edge's input revision schema before binding its function.
-      const inputSchema = this.store.getNodeSchema(step.from);
+      // Schema is read from the per-run binding so later node edits cannot
+      // change a pinned (or already-started) run.
+      const inputSchema = this.store.getRunSchema(runId, step.from);
       if (inputSchema) {
         const mismatch = checkSchema(inputSchema, current);
         if (mismatch) {
@@ -78,7 +80,7 @@ export class RunExecutor {
       // 2. invoke the pinned function revision
       try {
         const output = await this.runtime.invoke(step, current, source, {signal: abort.signal});
-        const outputSchema = this.store.getNodeSchema(step.to);
+        const outputSchema = this.store.getRunSchema(runId, step.to);
         if (outputSchema) {
           const mismatch = checkSchema(outputSchema, output);
           if (mismatch) {

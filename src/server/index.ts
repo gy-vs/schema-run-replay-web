@@ -4,8 +4,9 @@ import type {FuncRevision, JsonObject, PathStep} from '../common/types';
 import {DEFAULT_SAMPLE} from '../common/seed';
 import {queryPaths} from './paths';
 import {MigrationRuntime} from './runtime';
-import {RevisionConflictError, StudioStore, ValidationError} from './store';
+import {HttpError, RevisionConflictError, StudioStore, ValidationError} from './store';
 import {RunExecutor} from './executor';
+import {createReplayComparison, refreshReplayComparison} from './replay';
 
 type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<unknown>;
 const wrap =
@@ -122,11 +123,69 @@ export function createApp(store = new StudioStore()) {
     res.json(run);
   });
 
+  // All stored runs (newest first) — the replay view picks a historical run
+  // from this list.
+  app.get('/api/runs', (_req, res) => {
+    res.json({revision: store.getRevision(), runs: store.listRuns()});
+  });
+
   app.post('/api/runs/:id/cancel', (req, res) => {
     const ok = executor.cancel(req.params.id as string);
     if (!ok) return res.status(409).json({error: 'not_cancellable'});
     const run = store.getRun(req.params.id as string);
     res.json(run);
+  });
+
+  // ---- replay: sourced historical run vs. the CURRENT pinned graph --------
+
+  // Create a comparison. The response carries the bound graph revision; the
+  // current-side run executes detached and clients poll GET /api/replays/:id.
+  app.post('/api/replays', wrap(async (req, res) => {
+    const runId = asString(req.body?.runId);
+    if (!runId) throw new ValidationError('runId is required');
+    const start = asString(req.body?.start);
+    const goal = asString(req.body?.goal);
+    if (!start || !goal) throw new ValidationError('start and goal are required');
+    const expectedRaw = Number(req.body?.expectedRevision);
+    const expectedRevision = Number.isInteger(expectedRaw) ? expectedRaw : undefined;
+    const replay = await createReplayComparison(store, runtime, {
+      runId,
+      start,
+      goal,
+      reversibleOnly: Boolean(req.body?.reversibleOnly),
+      expectedRevision,
+    });
+    if (replay.current.runId) {
+      void executor.start(replay.current.runId).catch(() => undefined);
+    }
+    res.status(201).json({replay, currentGraphRevision: store.getRevision()});
+  }));
+
+  app.get('/api/replays/:id', (req, res) => {
+    const live = store.getLiveReplay(req.params.id as string);
+    if (!live) return res.status(404).json({error: 'not_found'});
+    // Refresh from the detached current-side run; the stored record is frozen
+    // once terminal, so later graph edits can never rewrite a completed replay.
+    const replay = refreshReplayComparison(store, live);
+    res.set('ETag', String(store.getRevision()));
+    res.json({replay, currentGraphRevision: store.getRevision()});
+  });
+
+  app.get('/api/replays', (_req, res) => {
+    const replays = store.listReplays();
+    res.json({
+      revision: store.getRevision(),
+      replays: replays.map((r) => ({
+        id: r.id,
+        status: r.status,
+        sourceRunId: r.sourceRunId,
+        historicalRevision: r.historical.graphRevision,
+        pinnedRevision: r.current.graphRevision,
+        currentStatus: r.current.status,
+        createdAt: r.createdAt,
+        finishedAt: r.finishedAt,
+      })),
+    });
   });
 
   // ---- experiment: compare multiple paths on one fixed sample -------------
@@ -169,6 +228,9 @@ export function createApp(store = new StudioStore()) {
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (error instanceof RevisionConflictError) {
       return res.status(409).json({error: 'revision_conflict', current: error.current, ...graphPayload()});
+    }
+    if (error instanceof HttpError) {
+      return res.status(error.statusCode).json({error: error.message});
     }
     if (error instanceof ValidationError) {
       return res.status(422).json({error: 'validation_error', details: error.message});
