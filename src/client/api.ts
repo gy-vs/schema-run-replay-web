@@ -1,4 +1,4 @@
-import type {CandidatePath, Edge, Func, Graph, JsonObject, Run} from '../common/types';
+import type {CandidatePath, Edge, Func, Graph, JsonObject, ReplayComparison, ReplaySummary, Run} from '../common/types';
 
 async function parse<T>(response: Response): Promise<T> {
   const body = (await response.json()) as T & {error?: string; details?: unknown};
@@ -105,6 +105,32 @@ export const api = {
   async deleteEdge(id: string, baseRevision: number) {
     return parse<{revision: number; graph: Graph}>(
       await fetch(`/api/edges/${id}?baseRevision=${baseRevision}`, {method: 'DELETE'}),
+    );
+  },
+
+  // ---- historical replay comparisons --------------------------------------
+
+  async replay(input: {historicalRunId: string; start?: string; goal?: string; pathKey?: string; baseRevision?: number}) {
+    return parse<ReplayComparison>(
+      await fetch('/api/replays', {
+        method: 'POST',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify(input),
+      }),
+    );
+  },
+
+  async replayStatus(id: string) {
+    return parse<ReplayComparison>(await fetch(`/api/replays/${id}`));
+  },
+
+  async replays() {
+    return parse<{revision: number; replays: ReplaySummary[]}>(await fetch('/api/replays'));
+  },
+
+  async cancelReplay(id: string) {
+    return parse<ReplayComparison>(
+      await fetch(`/api/replays/${id}/cancel`, {method: 'POST', headers: {'content-type': 'application/json'}}),
     );
   },
 };

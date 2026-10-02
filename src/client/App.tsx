@@ -4,6 +4,7 @@ import {
   Ban,
   FlaskConical,
   GitBranch,
+  GitCompareArrows,
   ListTree,
   Play,
   Plus,
@@ -16,6 +17,7 @@ import type {CandidatePath, Edge, Func, Graph, JsonObject, Run} from '../common/
 import {DEFAULT_SAMPLE} from '../common/seed';
 import {api} from './api';
 import {experimentReducer, initialExperiment, isTerminal, type ExperimentState} from './experiment';
+import {ReplayPanel} from './ReplayPanel';
 
 type Notice = {kind: 'info' | 'error' | 'conflict'; text: string};
 
@@ -38,6 +40,9 @@ export default function App() {
   const [showNewEdge, setShowNewEdge] = useState(false);
   const [busy, setBusy] = useState(false);
   const [selectedRunKey, setSelectedRunKey] = useState<string | null>(null);
+  // Middle pane view: live experiment trace, or the sourced replay workbench.
+  const [middleView, setMiddleView] = useState<'trace' | 'replay'>('trace');
+  const [replaySeedRunId, setReplaySeedRunId] = useState<string | null>(null);
 
   const expRef = useRef(exp);
   expRef.current = exp;
@@ -267,7 +272,21 @@ export default function App() {
 
         {/* ---- middle: details / run trace -------------------------------- */}
         <section className="pane">
-          <RunTrace exp={exp} runKey={selectedRunKey} />
+          {middleView === 'replay' ? (
+            <ReplayPanel
+              key={replaySeedRunId ?? 'replay'}
+              seedRunId={replaySeedRunId}
+              liveRevision={revision}
+              onBack={() => setMiddleView('trace')}
+              onNotice={setNotice}
+            />
+          ) : (
+            <RunTrace
+              exp={exp}
+              runKey={selectedRunKey}
+              onOpenReplay={(runId) => {setReplaySeedRunId(runId); setMiddleView('replay');}}
+            />
+          )}
         </section>
 
         {/* ---- right: graph editor ---------------------------------------- */}
@@ -450,24 +469,46 @@ function CandidateRow({
   );
 }
 
-function RunTrace({exp, runKey}: {exp: ExperimentState; runKey: string | null}) {
+function RunTrace({exp, runKey, onOpenReplay}: {
+  exp: ExperimentState;
+  runKey: string | null;
+  onOpenReplay: (runId: string | null) => void;
+}) {
   const slot = runKey ? exp.slots[runKey] : undefined;
   const selected = slot?.kind === 'run' ? slot.run ?? null : null;
   if (!exp.experimentId) {
     return <>
-      <h2>Run trace</h2>
+      <h2>
+        Run trace
+        <button className="mini" onClick={() => onOpenReplay(null)} title="Replay a finished historical run against the current graph">
+          <GitCompareArrows size={13} />historical replay
+        </button>
+      </h2>
       <p className="muted">Start a comparison to inspect per-edge intermediate results. Failures keep every earlier output and name the precise edge.</p>
+      <p className="muted">Need to revisit a migration from weeks ago? <strong>Historical replay</strong> freezes that run as fact, re-confirms paths on the current graph revision and shows the first step where they diverge — comparisons are stored server-side and can be recalled by id.</p>
     </>;
   }
   if (!selected) {
     return <>
-      <h2>Run trace</h2>
+      <h2>
+        Run trace
+        <button className="mini" onClick={() => onOpenReplay(null)}><GitCompareArrows size={13} />historical replay</button>
+      </h2>
       <p className="muted">Select an executed candidate on the left.</p>
     </>;
   }
+  const finished = isTerminal(selected.status);
   return (
     <>
-      <h2>Run trace <code className="small-code">{selected.id}</code></h2>
+      <h2>
+        Run trace <code className="small-code">{selected.id}</code>
+        <button className="mini" disabled={!finished} onClick={() => onOpenReplay(selected.id)}
+          title={finished
+            ? 'Sourced comparison: this run as historical fact vs. a fresh execution on the current graph'
+            : 'Replay is available once the run has finished'}>
+          <GitCompareArrows size={13} />replay vs current graph
+        </button>
+      </h2>
       <p className={`run-summary ${selected.status}`}>
         <span className={`status-dot ${selected.status}`} /> {selected.status} · total cost {selected.totalCost}
         {selected.failedEdgeId && <> · stopped at <code>{selected.failedEdgeId}</code></>}

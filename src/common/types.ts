@@ -137,3 +137,114 @@ export type CandidatePath = {
 };
 
 export type ApiError = {error: string; details?: unknown};
+
+// ---- historical replay comparison -----------------------------------------
+
+export type ReplayStatus = 'preparing' | 'running' | 'completed' | 'cancelled';
+
+/** The NEW side: everything is re-confirmed against one pinned graph state. */
+export type FreshSide = {
+  start: string;
+  goal: string;
+  /**
+   * Candidate paths re-enumerated and re-ranked on the graph pinned at replay
+   * creation — current costs and current function revisions, never the old
+   * run's ranking. Frozen on the record so later edits cannot rewrite it.
+   */
+  candidates: CandidatePath[];
+  /** key of the candidate chosen for the fresh execution */
+  chosenKey?: string;
+  runId?: string;
+  /** set when no current candidate could be executed (no path / all rejected) */
+  notExecutedReason?: string;
+};
+
+/** The OLD side: a frozen statement of what actually happened back then. */
+export type HistoricalSide = {
+  runId: string;
+  /** graph revision the historical run was created against */
+  graphRevision: number;
+  /** frozen copy of the historical run — never re-bound to newer revisions */
+  run: Run;
+};
+
+export type StepChange =
+  | 'edge_changed'
+  | 'revision_changed'
+  | 'condition_changed'
+  | 'cost_changed'
+  | 'status_changed'
+  | 'output_changed'
+  | 'only_in_history'
+  | 'only_in_fresh';
+
+export type StepDiff = {
+  index: number;
+  oldStep?: PathStep;
+  freshStep?: PathStep;
+  oldResult?: StepResult;
+  freshResult?: StepResult;
+  changes: StepChange[];
+  /** false exactly when the two sides have different outputs at this index */
+  outputEqual: boolean;
+};
+
+export type HistoricalVerdict =
+  | 'applicable'
+  | 'schema_issue'
+  | 'condition_rejected'
+  | 'unverifiable'
+  | 'absent';
+
+export type DivergenceReport = {
+  steps: StepDiff[];
+  /** first index where anything (edge, revision, condition, cost, output…) differs */
+  firstDifferentIndex: number | null;
+  /** first index where the intermediate OUTPUT document differs */
+  firstOutputDifferenceIndex: number | null;
+  /** final-to-final equality; null when at least one side has no final document */
+  finalEqual: boolean | null;
+  finalOld?: JsonObject;
+  finalFresh?: JsonObject;
+  samePath: boolean;
+  /** 1-based rank of the historical path key in the current ranking; null = gone */
+  historicalRank: number | null;
+  historicalVerdict: HistoricalVerdict;
+  notes: string[];
+};
+
+export type ReplayComparison = {
+  id: string;
+  status: ReplayStatus;
+  createdAt: string;
+  finishedAt?: string;
+  /** graph revision the NEW side was pinned to at creation */
+  boundGraphRevision: number;
+  /** baseRevision the page claimed to see when requesting, if supplied */
+  requestedBaseRevision?: number;
+  /** true when the page view was already behind the pinned graph at creation */
+  staleViewAtCreate: boolean;
+  historical: HistoricalSide;
+  fresh: FreshSide;
+  divergence?: DivergenceReport;
+  /** setup-level error, if the comparison itself could not be prepared */
+  error?: string;
+  /**
+   * Present only on live (polling) responses while the fresh run is in
+   * flight: its partial results. Never persisted — the stored comparison is
+   * closed by the server finalizer only.
+   */
+  liveFreshRun?: Run;
+};
+
+export type ReplaySummary = {
+  id: string;
+  status: ReplayStatus;
+  historicalRunId: string;
+  freshRunId?: string;
+  boundGraphRevision: number;
+  start: string;
+  goal: string;
+  createdAt: string;
+  finishedAt?: string;
+};

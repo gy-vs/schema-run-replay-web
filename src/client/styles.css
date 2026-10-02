@@ -88,4 +88,36 @@ pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;background:#f1f5f
 .trace-head .status-dot{margin-left:auto}
 .edge-card{display:block;width:100%;position:relative}
 .edge-card .tag{margin-left:6px}
+
+/* ---- historical replay -------------------------------------------------- */
+.replay-form{display:grid;gap:8px;padding:10px;border:1px solid #d3dbd6;border-radius:8px;background:#f8faf8}
+.recall-row{display:flex;gap:6px}
+.recall-row input{flex:1}
+.replay-index{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:4px;max-height:180px;overflow:auto}
+.replay-index li{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.replay-view{display:grid;gap:10px}
+.replay-banner{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:8px;font-size:13px;background:#eef2ef;border:1px solid #d3dbd6}
+.replay-banner.completed{background:#e6f2ec;border-color:#b8d8c9}
+.replay-banner.cancelled{background:#eef0ee;border-color:#ccd4cf}
+.replay-banner.running,.replay-banner.preparing{background:#e9f0f9;border-color:#c2d4ea}
+.replay-banner .mini{margin-left:auto}
+.replay-provenance{line-height:1.6}
+.stale-warn{display:inline-flex;align-items:center;gap:5px;margin-left:6px;padding:1px 8px;border-radius:999px;background:#fdf0d2;color:#6d5113;font-size:11px}
+.divergence-summary{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:9px 10px;border-radius:8px;font-size:12px;border:1px solid}
+.divergence-summary.ok{background:#e6f2ec;border-color:#b8d8c9;color:#1f5c43}
+.divergence-summary.bad{background:#f7e0e2;border-color:#e3b3b9;color:#8a2430}
+.divergence-summary.warn{background:#fdf0d2;border-color:#ecd9a6;color:#6d5113}
+.divergence-facts{flex-basis:100%;margin:6px 0 0;padding-left:18px;display:grid;gap:2px}
+.fresh-candidates{list-style:none;margin:6px 0 0;padding:0;display:grid;gap:4px}
+.fresh-candidate{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 8px;border:1px solid #dde6e1;border-radius:6px;background:#fff;font-size:12px}
+.fresh-candidate.chosen{border-color:#176b55;box-shadow:0 0 0 1px #176b55 inset}
+.tag.bad-tag{background:#f7e0e2;color:#8a2430;border-color:#e3b3b9}
+.sides{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.side{border:1px solid #d3dbd6;border-radius:8px;padding:10px;min-width:0;background:#fcfdfc}
+.side h3{margin:0 0 6px;font-size:12px;display:flex;align-items:center;gap:6px}
+.side.old{border-left:4px solid #8b948f}
+.side.fresh{border-left:4px solid #176b55}
+.trace.compact .trace-step{padding:7px 8px}
+.trace-step.first-diff{outline:2px solid #d18f3a;outline-offset:-1px;background:#fdf6ea}
+@media(max-width:1200px){.sides{grid-template-columns:1fr}}
 @media(max-width:1000px){.workspace{grid-template-columns:1fr}.pane{border-right:0;border-bottom:1px solid #d7ded9}}

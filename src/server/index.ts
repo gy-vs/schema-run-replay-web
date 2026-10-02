@@ -6,6 +6,7 @@ import {queryPaths} from './paths';
 import {MigrationRuntime} from './runtime';
 import {RevisionConflictError, StudioStore, ValidationError} from './store';
 import {RunExecutor} from './executor';
+import {ReplayService} from './replay';
 
 type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<unknown>;
 const wrap =
@@ -27,6 +28,7 @@ export function createApp(store = new StudioStore()) {
   app.use(express.json({limit: '1mb'}));
   const runtime = new MigrationRuntime();
   const executor = new RunExecutor(store, runtime);
+  const replays = new ReplayService(store, runtime, executor);
 
   function graphPayload() {
     return {revision: store.getRevision(), graph: store.snapshot()};
@@ -165,6 +167,44 @@ export function createApp(store = new StudioStore()) {
     };
     res.status(201).json(response);
   }));
+
+  // ---- historical replay: old finished run vs. the current graph ----------
+
+  app.post('/api/replays', wrap(async (req, res) => {
+    const body = req.body ?? {};
+    const historicalRunId = asString(body.historicalRunId);
+    if (!historicalRunId) throw new ValidationError('historicalRunId is required');
+    const replay = await replays.create({
+      historicalRunId,
+      start: asString(body.start),
+      goal: asString(body.goal),
+      pathKey: asString(body.pathKey),
+      baseRevision: body.baseRevision === undefined ? undefined : integer(body.baseRevision),
+    });
+    // Return the LIVE view: if the fresh run is already in flight the client
+    // can poll this same URL for its partial intermediate outputs.
+    res.status(201).json(replays.getLive(replay.id) ?? replay);
+  }));
+
+  app.get('/api/replays', (_req, res) => {
+    res.json({revision: store.getRevision(), replays: store.listReplays()});
+  });
+
+  app.get('/api/replays/:id', (req, res) => {
+    const replay = replays.getLive(req.params.id as string);
+    if (!replay) return res.status(404).json({error: 'not_found'});
+    res.json(replay);
+  });
+
+  // Cancel only the NEW side of a comparison; the historical record is fact.
+  app.post('/api/replays/:id/cancel', (req, res) => {
+    const replay = replays.cancel(req.params.id as string);
+    if (!replay) return res.status(404).json({error: 'not_found'});
+    if (replay.status === 'completed' || replay.status === 'cancelled') {
+      return res.status(409).json({error: 'not_cancellable'});
+    }
+    res.json(replays.getLive(replay.id) ?? replay);
+  });
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (error instanceof RevisionConflictError) {

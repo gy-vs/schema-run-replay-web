@@ -7,7 +7,10 @@ import type {
   JsonObject,
   Node,
   PathStep,
+  ReplayComparison,
+  ReplaySummary,
   Run,
+  Schema,
 } from '../common/types';
 import {buildDiagnostics} from '../common/graph';
 import {seedGraph} from '../common/seed';
@@ -31,6 +34,12 @@ type PendingRun = {
   abort: AbortController;
   /** graph revision the run was created from (for staleness diagnostics) */
   graphRevision: number;
+  /**
+   * Graph state pinned at creation. The executor resolves node schemas from
+   * this snapshot rather than the live graph, so a node edit a millisecond
+   * after creation cannot change what this run checks.
+   */
+  pinnedGraph: Graph;
   /** immutable per-step binding (function revision body) captured at creation */
   bound: BoundStep[];
 };
@@ -49,6 +58,7 @@ export class StudioStore {
   private graph: Graph;
   private revision = 1;
   private readonly runs = new Map<string, PendingRun>();
+  private readonly replays = new Map<string, ReplayComparison>();
 
   constructor(graph?: Graph) {
     this.graph = graph ?? seedGraph();
@@ -158,17 +168,24 @@ export class StudioStore {
    * Freeze a run: every step is copied and the function source is bound to the
    * revision current at creation time. Later edits — even a publish that
    * happens a millisecond later — cannot change what this run executes.
+   *
+   * `graphRevision` selects the pinned graph state for schema composition
+   * checks during execution; it defaults to the current state. Replays pin
+   * the revision captured when the comparison was requested.
    */
   createRun(input: {
     experimentId?: string;
     steps: PathStep[];
     sample: JsonObject;
+    graphRevision?: number;
   }): {run: Run; abort: AbortController} {
+    const pinnedGraph = structuredClone(this.graph);
+    const boundRevision = input.graphRevision ?? this.revision;
     const bound: BoundStep[] = [];
     for (const step of input.steps) {
-      const edge = this.graph.edges.find((e) => e.id === step.edgeId);
+      const edge = pinnedGraph.edges.find((e) => e.id === step.edgeId);
       if (!edge) throw new ValidationError(`unknown edge "${step.edgeId}"`);
-      const func = this.graph.funcs.find((f) => f.id === step.funcId);
+      const func = pinnedGraph.funcs.find((f) => f.id === step.funcId);
       if (!func) throw new ValidationError(`unknown function "${step.funcId}"`);
       const revisionNumber = step.funcRevision > 0 ? Math.min(step.funcRevision, func.revision) : func.revision;
       const rev = func.revisions[revisionNumber - 1];
@@ -189,7 +206,15 @@ export class StudioStore {
       results: [],
       createdAt: new Date().toISOString(),
     };
-    this.runs.set(run.id, {run, abort: new AbortController(), graphRevision: this.revision, bound});
+    this.runs.set(run.id, {
+      run,
+      abort: new AbortController(),
+      // The caller (replay) pins a revision it captured in the same tick;
+      // ordinary runs simply carry the store's current revision.
+      graphRevision: boundRevision,
+      pinnedGraph,
+      bound,
+    });
     return {run, abort: this.runs.get(run.id)!.abort};
   }
 
@@ -215,8 +240,53 @@ export class StudioStore {
     return this.runs.get(id)?.graphRevision;
   }
 
+  /**
+   * Schema from the run's PINNED graph state. A run never re-checks against a
+   * node version published after the run started.
+   */
+  getRunNodeSchema(runId: string, nodeId: string): Schema | undefined {
+    const pending = this.runs.get(runId);
+    if (!pending) return undefined;
+    return pending.pinnedGraph.nodes.find((n) => n.id === nodeId)?.schema;
+  }
+
   getNodeSchema(id: string) {
     return this.graph.nodes.find((n) => n.id === id)?.schema;
+  }
+
+  // ---- replay comparisons -------------------------------------------------
+
+  saveReplay(replay: ReplayComparison): void {
+    this.replays.set(replay.id, structuredClone(replay));
+  }
+
+  updateReplay(id: string, patch: Partial<ReplayComparison>): ReplayComparison | undefined {
+    const existing = this.replays.get(id);
+    if (!existing) return undefined;
+    const merged: ReplayComparison = {...existing, ...patch, id};
+    this.replays.set(id, merged);
+    return structuredClone(merged);
+  }
+
+  getReplay(id: string): ReplayComparison | undefined {
+    const replay = this.replays.get(id);
+    return replay ? structuredClone(replay) : undefined;
+  }
+
+  listReplays(): ReplaySummary[] {
+    return [...this.replays.values()]
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map((r) => ({
+        id: r.id,
+        status: r.status,
+        historicalRunId: r.historical.runId,
+        freshRunId: r.fresh.runId,
+        boundGraphRevision: r.boundGraphRevision,
+        start: r.fresh.start,
+        goal: r.fresh.goal,
+        createdAt: r.createdAt,
+        finishedAt: r.finishedAt,
+      }));
   }
 }
 
